@@ -9,9 +9,9 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "fork"
+rootProject.name = "optimus"
 
-for (name in listOf("fork-api", "fork-server")) {
+for (name in listOf("optimus-api", "optimus-server")) {
     include(name)
     file(name).mkdirs()
 }
