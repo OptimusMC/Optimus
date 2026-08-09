@@ -78,6 +78,18 @@
  idea {
      module {
          generatedSourceDirs.add(generatedDir.toFile())
+@@ -304,6 +_,11 @@
+     classpath(sourceSets.main.map { it.runtimeClasspath })
+ }
+ 
++tasks.registerRunTask("runDevServerSkipCompile") {
++    description = "Spin up a test server without compiling the code and assembling a jar"
++    classpath(provider { sourceSets.main.get().runtimeClasspath.files })
++}
++
+ tasks.registerRunTask("runBundler") {
+     description = "Spin up a test server from the Mojang mapped bundler jar"
+     classpath(tasks.createBundlerJar.flatMap { it.outputZip })
 @@ -316,7 +_,7 @@
  }
  
