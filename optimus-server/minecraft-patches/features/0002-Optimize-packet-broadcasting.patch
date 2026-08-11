@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MsMaciek <62432088+MsMaciek123@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 11:28:08 +0200
+Subject: [PATCH] Optimize packet broadcasting
+
+Groups tracked player connections into per-EventLoop buckets so broadcast
+packets can be batched into a single queue entry per EventLoop instead of
+individually dispatched per connection, reducing per-packet iteration and
+dispatch overhead. `PlayerList.players` is replaced with a variant that
+maintains cached `EventLoop` buckets, letting range-based broadcasts group
+in-range connections by EventLoop before enqueuing.
+
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 42ec67c53c35189838ce4767c2be620e05108159..bd0cad0e8a534fc8c9831ec60a75353e3fc5abdd 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1209,6 +1209,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         private final int range;
+         private SectionPos lastSectionPos;
+         public final Set<ServerPlayerConnection> seenBy = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>(); // Paper - Perf: optimise map impl
++        public final HashMap<io.netty.channel.EventLoop, pl.optimusteam.optimus.network.LoopBucket> seenBy_loopBuckets = new HashMap<>(); // Optimus - Optimize packet broadcasting - store LoopBuckets for seenBy connections
+ 
+         // Paper start - optimise entity tracker
+         private long lastChunkUpdate = -1L;
+@@ -1312,9 +1313,15 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+ 
+         @Override
+         public void sendToTrackingPlayers(final Packet<? super ClientGamePacketListener> packet) {
+-            for (ServerPlayerConnection connection : this.seenBy) {
+-                connection.send(packet);
++            // Optimus start - Optimize packet broadcasting
++            //for (ServerPlayerConnection connection : this.seenBy) {
++            //    connection.send(packet);
++            //}
++            for (pl.optimusteam.optimus.network.LoopBucket bucket : this.seenBy_loopBuckets.values()) {
++                var queueEntry = new pl.optimusteam.optimus.network.QueueEntry(bucket.getConnectionsCloned(), packet, null, false);
++                bucket.batchState.offerToMainQueue(queueEntry);
+             }
++            // Optimus end - Optimize packet broadcasting
+         }
+ 
+         @Override
+@@ -1343,6 +1350,15 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         public void removePlayer(final ServerPlayer player) {
+             org.spigotmc.AsyncCatcher.catchOp("player tracker clear"); // Spigot
+             if (this.seenBy.remove(player.connection)) {
++                // Optimus start - Optimize packet broadcasting - remove player.connection from this.seenBy_loopBuckets
++                io.netty.channel.EventLoop eventLoop = player.connection.connection.channel.eventLoop();
++                pl.optimusteam.optimus.network.LoopBucket bucket = this.seenBy_loopBuckets.get(eventLoop);
++                if (bucket != null) {
++                    bucket.connections.remove(player.connection.connection);
++                    if (bucket.connections.isEmpty())
++                        this.seenBy_loopBuckets.remove(eventLoop);
++                }
++                // Optimus end - Optimize packet broadcasting
+                 this.serverEntity.removePairing(player);
+                 if (this.seenBy.isEmpty()) {
+                     ChunkMap.this.level.debugSynchronizers().dropEntity(this.entity);
+@@ -1382,6 +1398,15 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                 // CraftBukkit end
+                 if (visibleToPlayer) {
+                     if (this.seenBy.add(player.connection)) {
++                        // Optimus start - Optimize packet broadcasting - add player.connection to this.seenBy_loopBuckets
++                        io.netty.channel.EventLoop eventLoop = player.connection.connection.channel.eventLoop();
++                        pl.optimusteam.optimus.network.LoopBucket bucket = this.seenBy_loopBuckets.get(eventLoop);
++                        if (bucket == null) {
++                            bucket = new pl.optimusteam.optimus.network.LoopBucket(eventLoop);
++                            this.seenBy_loopBuckets.putIfAbsent(eventLoop, bucket);
++                        }
++                        bucket.connections.add(player.connection.connection);
++                        // Optimus end - Optimize packet broadcasting
+                         // Paper start - entity tracking events
+                         if (io.papermc.paper.event.player.PlayerTrackEntityEvent.getHandlerList().getRegisteredListeners().length == 0 || new io.papermc.paper.event.player.PlayerTrackEntityEvent(player.getBukkitEntity(), this.entity.getBukkitEntity()).callEvent()) {
+                         this.serverEntity.addPairing(player);
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 5bea5dcdaf8ee0a38cd8587a55845e940d8f4cac..94564687ea21e71d45fb264f917088a1a1ad2946 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -113,7 +113,7 @@ public abstract class PlayerList {
+     private static final int SEND_PLAYER_INFO_INTERVAL = 600;
+     private static final SimpleDateFormat BAN_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd 'at' HH:mm:ss z", Locale.ROOT);
+     private final MinecraftServer server;
+-    public final List<ServerPlayer> players = new java.util.concurrent.CopyOnWriteArrayList(); // CraftBukkit - ArrayList -> CopyOnWriteArrayList: Iterator safety
++    public final pl.optimusteam.optimus.network.CopyOnWriteArrayListWithBatchStates players = new pl.optimusteam.optimus.network.CopyOnWriteArrayListWithBatchStates(); // CraftBukkit - ArrayList -> CopyOnWriteArrayList: Iterator safety // Optimus - optimize network - CopyOnWriteArrayList -> CopyOnWriteArrayListWithBatchStates: cache batch states
+     private final Map<UUID, ServerPlayer> playersByUUID = Maps.newHashMap();
+     private final UserBanList bans;
+     private final IpBanList ipBans;
+@@ -929,22 +929,32 @@ public abstract class PlayerList {
+         final ResourceKey<Level> dimension,
+         final Packet<?> packet
+     ) {
+-        for (int i = 0; i < this.players.size(); i++) {
+-            ServerPlayer player = this.players.get(i);
+-            // CraftBukkit start - Test if player receiving packet can see the source of the packet
+-            if (except != null && !player.getBukkitEntity().canSee(except.getBukkitEntity())) {
+-               continue;
+-            }
+-            // CraftBukkit end
+-            if (player != except && player.level().dimension() == dimension) {
+-                double xd = x - player.getX();
+-                double yd = y - player.getY();
+-                double zd = z - player.getZ();
+-                if (xd * xd + yd * yd + zd * zd < range * range) {
+-                    player.connection.send(packet);
++        // Optimus start - Optimize packet broadcasting
++        java.util.HashMap<io.netty.channel.EventLoop, pl.optimusteam.optimus.network.LoopBucket> eventLoopBuckets = this.players.getEventLoopBuckets();
++
++        for (pl.optimusteam.optimus.network.LoopBucket loopBucket : eventLoopBuckets.values()) {
++            java.util.ArrayList<net.minecraft.network.Connection> connectionsInRange = new java.util.ArrayList<>(loopBucket.connections.size());
++            for (Connection connection : loopBucket.connections) {
++                ServerPlayer player = connection.getPlayer();
++                // CraftBukkit start - Test if player receiving packet can see the source of the packet
++                if (except != null && !player.getBukkitEntity().canSee(except.getBukkitEntity())) {
++                    continue;
++                }
++                // CraftBukkit end
++                if (player != except && player.level().dimension() == dimension) {
++                    double xd = x - player.getX();
++                    double yd = y - player.getY();
++                    double zd = z - player.getZ();
++                    if (xd * xd + yd * yd + zd * zd < range * range) {
++                        connectionsInRange.add(player.connection.connection);
++                    }
+                 }
+             }
++
++            var queueEntry = new pl.optimusteam.optimus.network.QueueEntry(connectionsInRange, packet, null, false);
++            loopBucket.batchState.offerToMainQueue(queueEntry);
+         }
++        // Optimus end - Optimize packet broadcasting
+     }
+ 
+     public void saveAll() {
