@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Sat, 7 Feb 2026 21:02:48 +0100
+Subject: [PATCH] Optimize packet sending overhead
+
+Co-Authored-By: MsMaciek <62432088+MsMaciek123@users.noreply.github.com>
+
+Batches packets sent from off-thread into a per-EventLoop queue instead of scheduling an
+individual `execute()` task for each packet, reducing task submission and wakeup overhead
+on the Netty event loop. Off-thread sends are pushed onto a lock-free queue (separate
+main-thread and off-main-thread queues per EventLoop) and drained later, while flushes
+use `lazyExecute` instead of `execute` to avoid unnecessarily waking the event loop thread.
+
+diff --git a/net/minecraft/network/Connection.java b/net/minecraft/network/Connection.java
+index 0f06d509125e72ec11d263d0d5c2179d65f6d8dd..e835832e550df95279f403c105a40a37a0fbf914 100644
+--- a/net/minecraft/network/Connection.java
++++ b/net/minecraft/network/Connection.java
+@@ -127,6 +127,10 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+     public boolean isPending = true;
+     public boolean queueImmunity;
+     // Paper end - Optimize network
++    // Optimus start - Optimize packet sending overhead
++    public static final java.util.concurrent.ConcurrentHashMap<io.netty.channel.EventLoop, pl.optimusteam.optimus.network.EventLoopBatchState> BATCH_STATES = new java.util.concurrent.ConcurrentHashMap<>();
++    private pl.optimusteam.optimus.network.@Nullable EventLoopBatchState cachedBatchState;
++    // Optimus end - Optimize packet sending overhead
+ 
+     public Connection(final PacketFlow receiving) {
+         this.receiving = receiving;
+@@ -442,13 +446,46 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+ 
+     private void sendPacket(final Packet<?> packet, final @Nullable ChannelFutureListener listener, final boolean flush) {
+         this.sentPackets++;
++        // Optimus start - Optimize packet sending overhead
++        optimus$sendPacketViaDrain(packet, listener, flush);
++        // if (this.channel.eventLoop().inEventLoop()) {
++        //     this.doSendPacket(packet, listener, flush);
++        // } else {
++        //     this.channel.eventLoop().execute(() -> this.doSendPacket(packet, listener, flush));
++        // }
++        // Optimus end - Optimize packet sending overhead
++    }
++
++    // Optimus start - Optimize packet sending overhead
++    private pl.optimusteam.optimus.network.EventLoopBatchState optimus$getBatchState() {
++        pl.optimusteam.optimus.network.EventLoopBatchState state = this.cachedBatchState;
++        if (state == null) {
++            io.netty.channel.EventLoop eventLoop = this.channel.eventLoop();
++            state = BATCH_STATES.computeIfAbsent(eventLoop, pl.optimusteam.optimus.network.EventLoopBatchState::new);
++            this.cachedBatchState = state;
++        }
++        return state;
++    }
++
++    private void optimus$sendPacketViaDrain(Packet<?> packet, @Nullable ChannelFutureListener sendListener, boolean flush) {
+         if (this.channel.eventLoop().inEventLoop()) {
+-            this.doSendPacket(packet, listener, flush);
++            this.doSendPacket(packet, sendListener, flush);
+         } else {
+-            this.channel.eventLoop().execute(() -> this.doSendPacket(packet, listener, flush));
++            final pl.optimusteam.optimus.network.EventLoopBatchState state = this.optimus$getBatchState();
++
++            var queueEntry = new pl.optimusteam.optimus.network.QueueEntry(this, packet, sendListener, flush);
++            if (io.papermc.paper.util.MCUtil.isMainThread()) {
++                state.offerToMainQueue(queueEntry);
++            } else {
++                state.offerToOffMainQueue(queueEntry);
++            }
+         }
+     }
+ 
++    public void optimus$doSendPacket(Packet<?> packet, @Nullable ChannelFutureListener sendListener, boolean flush) {
++        doSendPacket(packet, sendListener, flush);
++    }
++    // Optimus end - Optimize packet sending overhead
+     private void doSendPacket(final Packet<?> packet, final @Nullable ChannelFutureListener listener, final boolean flush) {
+         // Paper start - Optimize network
+         final net.minecraft.server.level.ServerPlayer player = this.getPlayer();
+@@ -493,7 +530,8 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         if (this.channel.eventLoop().inEventLoop()) {
+             this.channel.flush();
+         } else {
+-            this.channel.eventLoop().execute(() -> this.channel.flush());
++            ((io.netty.util.concurrent.AbstractEventExecutor) this.channel.eventLoop()).lazyExecute(() -> this.channel.flush()); // Optimus - Optimize packet sending overhead
++            // Flush lazily using lazyExecute in order to not wake up netty thread, because it auto wakes up every PACKET_DRAINING_INTERVAL and there's no need for syscall
+         }
+     }
+ 

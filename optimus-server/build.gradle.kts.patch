@@ -46,6 +46,7 @@
  dependencies {
 -    implementation(project(":paper-api"))
 +    implementation(project(":optimus-api"))
++    implementation("org.jctools:jctools-core:4.0.5")
      implementation("ca.spottedleaf:concurrentutil:0.0.10")
      implementation("org.jline:jline-terminal-ffm:3.27.1") // use ffm on java 22+
      implementation("org.jline:jline-terminal-jni:3.27.1") // fall back to jni on java 21
