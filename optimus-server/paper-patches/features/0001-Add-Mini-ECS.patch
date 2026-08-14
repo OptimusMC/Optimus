@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Fri, 14 Aug 2026 22:27:54 +0200
+Subject: [PATCH] Add Mini ECS
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+index 2f40476da09c0c679047978437de07a5d162fee4..3ae00c6750359cd59a53798a56c7a4fba324c072 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+@@ -719,7 +719,7 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
+                 }
+             }
+ 
+-            this.getHandle().visibleByDefault = visible;
++            this.getHandle().optimus$setVisibleByDefault(visible); // Optimus - Mini ECS
+         }
+     }
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+index 2e95fee39986bfc511384d208badb94d4f660ee8..65f1fc9528f282a6857f06d6f94ab29b8579c882 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+@@ -1863,6 +1863,7 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+         invertedPlugins = new HashSet<>();
+         invertedPlugins.add(CraftPlayer.getPluginWeakReference(plugin));
+         this.invertedVisibilityEntities.put(entity.getUniqueId(), invertedPlugins);
++        this.optimus$syncVisibilityBit(); // Optimus - Mini ECS
+ 
+         return true;
+     }
+@@ -1901,6 +1902,7 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+         if (this.invertedVisibilityEntities.remove(entity.getUniqueId()) == null) {
+             this.untrackAndHideEntity(entity);
+         }
++        this.optimus$syncVisibilityBit(); // Optimus - Mini ECS
+     }
+ 
+     @Override
+@@ -1944,6 +1946,7 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+             return false; // Some other plugins still want the entity inverted
+         }
+         this.invertedVisibilityEntities.remove(entity.getUniqueId());
++        this.optimus$syncVisibilityBit(); // Optimus - Mini ECS
+ 
+         return true;
+     }
+@@ -2017,6 +2020,7 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+         if (this.invertedVisibilityEntities.remove(entity.getUniqueId()) == null) {
+             this.trackAndShowEntity(entity);
+         }
++        this.optimus$syncVisibilityBit(); // Optimus - Mini ECS
+     }
+     // Paper start
+     public com.destroystokyo.paper.profile.PlayerProfile getPlayerProfile() {
+@@ -2049,8 +2053,20 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+ 
+     public void onEntityRemove(Entity entity) {
+         this.invertedVisibilityEntities.remove(entity.getUUID());
++        this.optimus$syncVisibilityBit(); // Optimus - Mini ECS
+     }
+ 
++    // Optimus start - Mini ECS
++    public boolean optimus$hasInvertedVisibility() {
++        return !this.invertedVisibilityEntities.isEmpty();
++    }
++
++    private void optimus$syncVisibilityBit() {
++        ServerPlayer handle = this.getHandle();
++        if (handle.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setHasInvertedVisibility(handle.ecsSlot, !this.invertedVisibilityEntities.isEmpty());
++    }
++    // Optimus end - Mini ECS
++
+     @Override
+     public boolean canSee(Player player) {
+         return this.canSee((org.bukkit.entity.Entity) player);

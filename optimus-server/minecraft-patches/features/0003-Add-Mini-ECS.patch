@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Fri, 14 Aug 2026 22:27:54 +0200
+Subject: [PATCH] Add Mini ECS
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index 0743659c9f1122088adad4992b93649efc9ba873..c85b264f24250403af487bacc5177ddc5e18ede1 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -988,6 +988,7 @@ public final class RegionizedPlayerChunkLoader {
+             this.lastChunkX = currentChunkX;
+             this.lastChunkZ = currentChunkZ;
+             this.lastSendDistance = sendViewDistance;
++            if (this.player.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setViewDistance(this.player.ecsSlot, sendViewDistance); // Optimus - Mini ECS
+             this.lastLoadDistance = loadViewDistance;
+             this.lastTickDistance = tickViewDistance;
+             this.canGenerateChunks = canGenerateChunks;
+diff --git a/io/papermc/paper/entity/activation/ActivationRange.java b/io/papermc/paper/entity/activation/ActivationRange.java
+index ce6b57eeeeb1bd652f4bb53c19dcfbc05126c7e9..9cadafa540ec87099dea339d57dc85b895aaa2b7 100644
+--- a/io/papermc/paper/entity/activation/ActivationRange.java
++++ b/io/papermc/paper/entity/activation/ActivationRange.java
+@@ -142,7 +142,7 @@ public final class ActivationRange {
+         maxRange = Math.min((world.spigotConfig.simulationDistance << 4) - 8, maxRange);
+ 
+         for (final Player player : world.players()) {
+-            player.activatedTick = MinecraftServer.currentTick;
++            player.optimus$setActivatedTick(MinecraftServer.currentTick); // Optimus - Mini ECS
+             if (world.spigotConfig.ignoreSpectatorActivation && player.isSpectator()) {
+                 continue;
+             }
+@@ -177,11 +177,11 @@ public final class ActivationRange {
+     private static void activateEntity(final Entity entity) {
+         if (MinecraftServer.currentTick > entity.activatedTick) {
+             if (entity.defaultActivationState) {
+-                entity.activatedTick = MinecraftServer.currentTick;
++                entity.optimus$setActivatedTick(MinecraftServer.currentTick); // Optimus - Mini ECS
+                 return;
+             }
+             if (entity.activationType.boundingBox.intersects(entity.getBoundingBox())) {
+-                entity.activatedTick = MinecraftServer.currentTick;
++                entity.optimus$setActivatedTick(MinecraftServer.currentTick); // Optimus - Mini ECS
+             }
+         }
+     }
+@@ -311,7 +311,7 @@ public final class ActivationRange {
+                 // Check immunities every 20 ticks.
+                 final int immunity = checkEntityImmunities(entity);
+                 if (immunity >= 0) {
+-                    entity.activatedTick = MinecraftServer.currentTick + immunity;
++                    entity.optimus$setActivatedTick(MinecraftServer.currentTick + immunity); // Optimus - Mini ECS
+                 } else {
+                     entity.isTemporarilyActive = true;
+                 }
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index bd0cad0e8a534fc8c9831ec60a75353e3fc5abdd..fa0f264acd56ee23e8278c3ad78ae19afd384e0d 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1004,6 +1004,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                 }
+                 ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(trackedEntity);
+                 // Paper end - optimise entity tracker
++                pl.optimusteam.optimus.ecs.EntityComponents.add(entity, range); // Optimus - Mini ECS
+                 trackedEntity.updatePlayers(this.level.players());
+                 if (entity instanceof ServerPlayer player) {
+                     this.updatePlayerStatus(player, true);
+@@ -1031,6 +1032,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         ChunkMap.TrackedEntity trackedEntity = this.entityMap.remove(entity.getId());
+         if (trackedEntity != null) {
+             trackedEntity.broadcastRemoved();
++            pl.optimusteam.optimus.ecs.EntityComponents.remove(entity); // Optimus - Mini ECS
+         }
+         ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(null); // Paper - optimise entity tracker
+     }
+diff --git a/net/minecraft/server/level/ServerPlayerGameMode.java b/net/minecraft/server/level/ServerPlayerGameMode.java
+index 45cbc7913546fe7294cf1ac4a885e6ca68dcbd7f..bc2438bc341ea1839c128b195f268e73035ad252 100644
+--- a/net/minecraft/server/level/ServerPlayerGameMode.java
++++ b/net/minecraft/server/level/ServerPlayerGameMode.java
+@@ -101,6 +101,7 @@ public class ServerPlayerGameMode {
+         this.gameModeForPlayer = gameModeForPlayer;
+         Abilities abilities = this.player.getAbilities();
+         gameModeForPlayer.updatePlayerAbilities(abilities);
++        if (this.player.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setSpectator(this.player.ecsSlot, gameModeForPlayer == GameType.SPECTATOR); // Optimus - Mini ECS
+     }
+ 
+     private boolean isInRangeOfGround() {
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 74a2b3dcd303b25e9c26f3e4d4220b390b32f1d5..3489b9db01b6819a504c3435f1482b07993da77f 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -387,6 +387,20 @@ public abstract class Entity
+     public long activatedTick = Integer.MIN_VALUE;
+     public boolean isTemporarilyActive;
+     public long activatedImmunityTick = Integer.MIN_VALUE;
++    // Optimus start - Mini ECS
++    public int ecsSlot = -1;
++    public int ecsEntitySlot = -1;
++
++    public final void optimus$setActivatedTick(final long tick) {
++        this.activatedTick = tick;
++        if (this.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setActivatedTick(this.ecsEntitySlot, tick);
++    }
++
++    public final void optimus$setVisibleByDefault(final boolean visible) {
++        this.visibleByDefault = visible;
++        if (this.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setVisibleByDefault(this.ecsEntitySlot, visible);
++    }
++    // Optimus end - Mini ECS
+ 
+     public void inactiveTick() {
+     }
+@@ -1152,7 +1166,7 @@ public abstract class Entity
+             if (moverType == MoverType.PISTON) {
+                 delta = this.limitPistonMovement(delta);
+                 // Paper start - EAR 2
+-                this.activatedTick = Math.max(this.activatedTick, net.minecraft.server.MinecraftServer.currentTick + 20);
++                this.optimus$setActivatedTick(Math.max(this.activatedTick, net.minecraft.server.MinecraftServer.currentTick + 20)); // Optimus - Mini ECS
+                 this.activatedImmunityTick = Math.max(this.activatedImmunityTick, net.minecraft.server.MinecraftServer.currentTick + 20);
+                 // Paper end - EAR 2
+                 if (delta.equals(Vec3.ZERO)) {
+@@ -2757,7 +2771,7 @@ public abstract class Entity
+             }
+             // Spigot end
+             this.persist = input.getBooleanOr("Bukkit.persist", true);
+-            this.visibleByDefault = input.getBooleanOr("Bukkit.visibleByDefault", true);
++            this.optimus$setVisibleByDefault(input.getBooleanOr("Bukkit.visibleByDefault", true)); // Optimus - Mini ECS
+             // SPIGOT-6907: re-implement LivingEntity#setMaximumAir()
+             this.maxAirTicks = input.getIntOr("Bukkit.MaxAirSupply",this.maxAirTicks);
+             // CraftBukkit end
+@@ -4524,6 +4538,7 @@ public abstract class Entity
+         if (len < 0) maxZ = minZ;
+         if (len > 64) maxZ = minZ + 64.0;
+         this.bb = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
++        if (this.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setBb(this.ecsEntitySlot, minX, minY, minZ, maxX, maxY, maxZ); // Optimus - Mini ECS
+         // CraftBukkit end
+     }
+ 
+@@ -4967,6 +4982,10 @@ public abstract class Entity
+             synchronized (this.posLock) { // Paper - detailed watchdog information
+             this.position = new Vec3(x, y, z);
+             } // Paper - detailed watchdog information
++            // Optimus start - Mini ECS
++            if (this.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setPos(this.ecsEntitySlot, x, y, z);
++            if (this.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setPos(this.ecsSlot, x, y, z);
++            // Optimus end - Mini ECS
+             int fx = Mth.floor(x);
+             int fy = Mth.floor(y);
+             int fz = Mth.floor(z);
+@@ -5186,6 +5205,7 @@ public abstract class Entity
+ 
+     public void setLevel(final Level level) {
+         this.level = level;
++        if (this.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setDimension(this.ecsSlot, level.dimension()); // Optimus - Mini ECS
+     }
+ 
+     public DamageSources damageSources() {
+diff --git a/net/minecraft/world/level/block/piston/PistonMovingBlockEntity.java b/net/minecraft/world/level/block/piston/PistonMovingBlockEntity.java
+index c5c0b01c41055a82e49c1546d4525da0acce13a4..dcb349c2679a965874a5616e2c14d4f2a84c8a57 100644
+--- a/net/minecraft/world/level/block/piston/PistonMovingBlockEntity.java
++++ b/net/minecraft/world/level/block/piston/PistonMovingBlockEntity.java
+@@ -160,7 +160,7 @@ public class PistonMovingBlockEntity extends BlockEntity {
+ 
+                                 entity.setDeltaMovement(dx, dy, dz);
+                                 // Paper - EAR items stuck in slime pushed by a piston
+-                                entity.activatedTick = Math.max(entity.activatedTick, net.minecraft.server.MinecraftServer.currentTick + 10);
++                                entity.optimus$setActivatedTick(Math.max(entity.activatedTick, net.minecraft.server.MinecraftServer.currentTick + 10)); // Optimus - Mini ECS
+                                 entity.activatedImmunityTick = Math.max(entity.activatedImmunityTick, net.minecraft.server.MinecraftServer.currentTick + 10);
+                                 // Paper end
+                                 break;

@@ -3,6 +3,7 @@ package pl.optimusteam.optimus.network;
 import io.netty.channel.EventLoop;
 import net.minecraft.network.Connection;
 import net.minecraft.server.level.ServerPlayer;
+import pl.optimusteam.optimus.ecs.PlayerComponents;
 
 import java.util.HashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -19,6 +20,9 @@ public class CopyOnWriteArrayListWithBatchStates extends CopyOnWriteArrayList<Se
         Connection connection = e.connection.connection;
         EventLoop eventLoop = connection.channel.eventLoop();
         eventLoopBuckets.computeIfAbsent(eventLoop, _ -> new LoopBucket(eventLoop)).connections.add(connection);
+
+        PlayerComponents.add(e); // Mini ECS
+
         return super.add(e);
     }
 
@@ -28,6 +32,9 @@ public class CopyOnWriteArrayListWithBatchStates extends CopyOnWriteArrayList<Se
         Connection connection = e.connection.connection;
         EventLoop eventLoop = connection.channel.eventLoop();
         eventLoopBuckets.computeIfAbsent(eventLoop, _ -> new LoopBucket(eventLoop)).connections.remove(connection);
+
+        PlayerComponents.remove(e); // Mini ECS
+
         return super.remove(e);
     }
 }
