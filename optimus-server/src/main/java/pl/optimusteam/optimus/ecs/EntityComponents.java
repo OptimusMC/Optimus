@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
 import io.papermc.paper.configuration.WorldConfiguration;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Marker;
 import net.minecraft.world.phys.AABB;
 
 import java.util.Arrays;
@@ -30,6 +31,7 @@ public final class EntityComponents {
     public static long[] activatedTick = new long[capacity];
     public static boolean[] visibleByDefault = new boolean[capacity];
     public static boolean[] isPlayer = new boolean[capacity];
+    public static boolean[] isMarker = new boolean[capacity];
     public static boolean[] spectatorEntity = new boolean[capacity];
     public static boolean[] cameraIsSelf = new boolean[capacity];
     public static Object[] level = new Object[capacity];
@@ -58,6 +60,7 @@ public final class EntityComponents {
         visibleByDefault[slot] = e.visibleByDefault;
         boolean p = e instanceof ServerPlayer;
         isPlayer[slot] = p;
+        isMarker[slot] = e instanceof Marker;
         spectatorEntity[slot] = e.isSpectator();
         cameraIsSelf[slot] = !p || ((ServerPlayer) e).getCamera() == e;
         level[slot] = e.level();
@@ -89,6 +92,7 @@ public final class EntityComponents {
             activatedTick[slot] = activatedTick[last];
             visibleByDefault[slot] = visibleByDefault[last];
             isPlayer[slot] = isPlayer[last];
+            isMarker[slot] = isMarker[last];
             spectatorEntity[slot] = spectatorEntity[last];
             cameraIsSelf[slot] = cameraIsSelf[last];
             level[slot] = level[last];
@@ -185,6 +189,7 @@ public final class EntityComponents {
         activatedTick = Arrays.copyOf(activatedTick, capacity);
         visibleByDefault = Arrays.copyOf(visibleByDefault, capacity);
         isPlayer = Arrays.copyOf(isPlayer, capacity);
+        isMarker = Arrays.copyOf(isMarker, capacity);
         spectatorEntity = Arrays.copyOf(spectatorEntity, capacity);
         cameraIsSelf = Arrays.copyOf(cameraIsSelf, capacity);
         level = Arrays.copyOf(level, capacity);

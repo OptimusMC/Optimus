@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Sat, 15 Aug 2026 20:14:41 +0200
+Subject: [PATCH] Optimize EAR using SoA (ECS)
+
+Co-authored-by: MsMaciek <62432088+MsMaciek123@users.noreply.github.com>
+
+diff --git a/io/papermc/paper/entity/activation/ActivationRange.java b/io/papermc/paper/entity/activation/ActivationRange.java
+index 9cadafa540ec87099dea339d57dc85b895aaa2b7..c3fb3d324e17b4056ea56d35c23fac16bee47445 100644
+--- a/io/papermc/paper/entity/activation/ActivationRange.java
++++ b/io/papermc/paper/entity/activation/ActivationRange.java
+@@ -141,32 +141,10 @@ public final class ActivationRange {
+         maxRange = Math.max(maxRange, villagerActivationRange);
+         maxRange = Math.min((world.spigotConfig.simulationDistance << 4) - 8, maxRange);
+ 
+-        for (final Player player : world.players()) {
+-            player.optimus$setActivatedTick(MinecraftServer.currentTick); // Optimus - Mini ECS
+-            if (world.spigotConfig.ignoreSpectatorActivation && player.isSpectator()) {
+-                continue;
+-            }
+-
+-            final int worldHeight = world.getHeight();
+-            ActivationRange.maxBB = player.getBoundingBox().inflate(maxRange, worldHeight, maxRange);
+-            ActivationType.MISC.boundingBox = player.getBoundingBox().inflate(miscActivationRange, worldHeight, miscActivationRange);
+-            ActivationType.RAIDER.boundingBox = player.getBoundingBox().inflate(raiderActivationRange, worldHeight, raiderActivationRange);
+-            ActivationType.ANIMAL.boundingBox = player.getBoundingBox().inflate(animalActivationRange, worldHeight, animalActivationRange);
+-            ActivationType.MONSTER.boundingBox = player.getBoundingBox().inflate(monsterActivationRange, worldHeight, monsterActivationRange);
+-            ActivationType.WATER.boundingBox = player.getBoundingBox().inflate(waterActivationRange, worldHeight, waterActivationRange);
+-            ActivationType.FLYING_MONSTER.boundingBox = player.getBoundingBox().inflate(flyingActivationRange, worldHeight, flyingActivationRange);
+-            ActivationType.VILLAGER.boundingBox = player.getBoundingBox().inflate(villagerActivationRange, worldHeight, villagerActivationRange);
+-
+-            final List<Entity> entities = world.getEntities((Entity) null, ActivationRange.maxBB, e -> true);
+-            final boolean tickMarkers = world.paperConfig().entities.markers.tick;
+-            for (final Entity entity : entities) {
+-                if (!tickMarkers && entity instanceof Marker) {
+-                    continue;
+-                }
+-
+-                ActivationRange.activateEntity(entity);
+-            }
+-        }
++        // Optimus start - Optimize EAR using SoA (ECS)
++        pl.optimusteam.optimus.activation.ActivationSweep.activateEntities(world, miscActivationRange, raiderActivationRange,
++            animalActivationRange, monsterActivationRange, waterActivationRange, flyingActivationRange, villagerActivationRange, maxRange);
++        // Optimus end - Optimize EAR using SoA (ECS)
+     }
+ 
+     /**
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 39d935b0b394babc8b89cd4624b328f43fbb2e26..4f17e12b2d729791ed6c66acccea70de0fd27896 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -990,6 +990,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             EntityType<?> type = entity.getType();
+             int range = type.clientTrackingRange() * 16;
+             range = org.spigotmc.TrackingRange.getEntityTrackingRange(entity, range); // Spigot
++            if (entity.ecsEntitySlot == -1) pl.optimusteam.optimus.ecs.EntityComponents.add(entity, range); // Optimus - Optimize EAR using SoA (ECS)
+             if (range != 0) {
+                 int updateInterval = type.updateInterval();
+                 if (this.entityMap.containsKey(entity.getId())) {
+@@ -1004,7 +1005,6 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                 }
+                 ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(trackedEntity);
+                 // Paper end - optimise entity tracker
+-                pl.optimusteam.optimus.ecs.EntityComponents.add(entity, range); // Optimus - Mini ECS
+                 trackedEntity.updatePlayers(this.level.players());
+                 if (entity instanceof ServerPlayer player) {
+                     this.updatePlayerStatus(player, true);
+@@ -1032,8 +1032,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         ChunkMap.TrackedEntity trackedEntity = this.entityMap.remove(entity.getId());
+         if (trackedEntity != null) {
+             trackedEntity.broadcastRemoved();
+-            pl.optimusteam.optimus.ecs.EntityComponents.remove(entity); // Optimus - Mini ECS
+         }
++        pl.optimusteam.optimus.ecs.EntityComponents.remove(entity); // Optimus - Optimize EAR using SoA (ECS)
+         ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(null); // Paper - optimise entity tracker
+     }
+ 
