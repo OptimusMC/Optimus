@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Sat, 15 Aug 2026 15:52:01 +0200
+Subject: [PATCH] Optimize Entity Tracker using SoA (ECS)
+
+Co-authored-by: MsMaciek <62432088+MsMaciek123@users.noreply.github.com>
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index c85b264f24250403af487bacc5177ddc5e18ede1..349863c26a9350464e7d5aff1171e07d97ce9412 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -433,6 +433,7 @@ public final class RegionizedPlayerChunkLoader {
+ 
+         private void sendChunk(final int chunkX, final int chunkZ) {
+             if (this.sentChunks.add(CoordinateUtils.getChunkKey(chunkX, chunkZ))) {
++                pl.optimusteam.optimus.ecs.PlayerComponents.sentChunkAdd(this.player, chunkX, chunkZ); // Optimus - Optimize Entity Tracker using SoA (ECS)
+                 ((ChunkSystemChunkHolder)((ChunkSystemServerLevel)this.world).moonrise$getChunkTaskScheduler().chunkHolderManager
+                         .getChunkHolder(chunkX, chunkZ).vanillaChunkHolder).moonrise$addReceivedChunk(this.player);
+ 
+@@ -449,6 +450,7 @@ public final class RegionizedPlayerChunkLoader {
+             if (!this.sentChunks.remove(CoordinateUtils.getChunkKey(chunkX, chunkZ))) {
+                 return;
+             }
++            pl.optimusteam.optimus.ecs.PlayerComponents.sentChunkRemove(this.player, chunkX, chunkZ); // Optimus - Optimize Entity Tracker using SoA (ECS)
+             this.sendUnloadChunkRaw(chunkX, chunkZ);
+         }
+ 
+@@ -1017,6 +1019,7 @@ public final class RegionizedPlayerChunkLoader {
+                 if (!sendChunk && sentChunk) {
+                     // have sent the chunk, but don't want it anymore
+                     // unload it now
++                    pl.optimusteam.optimus.ecs.PlayerComponents.sentChunkRemove(this.player, chunkX, chunkZ); // Optimus - Optimize Entity Tracker using SoA (ECS)
+                     this.sendUnloadChunkRaw(chunkX, chunkZ);
+                 }
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java b/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
+index 8e7472157a98de607c03769a91f64c8369fd3ea6..1d561af9e82d0a49ec7be387bcdd3ebb58a2af27 100644
+--- a/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
++++ b/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
+@@ -1,14 +1,8 @@
+ package ca.spottedleaf.moonrise.patches.entity_tracker;
+ 
+-import ca.spottedleaf.moonrise.common.misc.NearbyPlayers;
+-
+ public interface EntityTrackerTrackedEntity {
+ 
+-    public void moonrise$tick(final NearbyPlayers.TrackedChunk chunk);
+-
+-    public void moonrise$removeNonTickThreadPlayers();
+-
+-    public void moonrise$clearPlayers();
++    // Optimus - Optimize Entity Tracker using SoA (ECS) - per-pair tick moved to EntityTracker
+ 
+     public boolean moonrise$hasPlayers();
+ 
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index fa0f264acd56ee23e8278c3ad78ae19afd384e0d..39d935b0b394babc8b89cd4624b328f43fbb2e26 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1039,6 +1039,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+ 
+     // Paper start - optimise entity tracker
+     private void newTrackerTick() {
++        pl.optimusteam.optimus.tracker.EntityTracker.tick(this.level); // Optimus - Optimize Entity Tracker using SoA (ECS)
+         final ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup entityLookup = (ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup)((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getEntityLookup();;
+ 
+         final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = entityLookup.trackerEntities;
+@@ -1049,7 +1050,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             if (tracker == null) {
+                 continue;
+             }
+-            ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkData().nearbyPlayers);
++            // Optimus - Optimize Entity Tracker using SoA (ECS) - pairing moved to EntityTracker
+             if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$hasPlayers()
+                 || ((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkStatus().isOrAfter(FullChunkStatus.ENTITY_TICKING)) {
+                 tracker.serverEntity.sendChanges();
+@@ -1059,41 +1060,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     // Paper end - optimise entity tracker
+ 
+     protected void tick() {
+-        // Paper start - optimise entity tracker
+-        if (true) {
+-            this.newTrackerTick();
+-            return;
+-        }
+-        // Paper end - optimise entity tracker
+-        // Paper - rewrite chunk system
+-
+-        List<ServerPlayer> movedPlayers = Lists.newArrayList();
+-        List<ServerPlayer> players = this.level.players();
+-
+-        for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
+-            SectionPos oldPos = trackedEntity.lastSectionPos;
+-            SectionPos newPos = SectionPos.of(trackedEntity.entity);
+-            boolean sectionPosChanged = !Objects.equals(oldPos, newPos);
+-            if (sectionPosChanged) {
+-                trackedEntity.updatePlayers(players);
+-                Entity entity = trackedEntity.entity;
+-                if (entity instanceof ServerPlayer) {
+-                    movedPlayers.add((ServerPlayer)entity);
+-                }
+-
+-                trackedEntity.lastSectionPos = newPos;
+-            }
+-
+-            if (sectionPosChanged || trackedEntity.entity.needsSync || this.distanceManager.inEntityTickingRange(newPos.chunk().pack())) {
+-                trackedEntity.serverEntity.sendChanges();
+-            }
+-        }
+-
+-        if (!movedPlayers.isEmpty()) {
+-            for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
+-                trackedEntity.updatePlayers(movedPlayers);
+-            }
+-        }
++        this.newTrackerTick(); // Optimus - Optimize Entity Tracker using SoA (ECS) - dead vanilla body removed
+     }
+ 
+     public void sendToTrackingPlayers(final Entity entity, final Packet<? super ClientGamePacketListener> packet) {
+@@ -1209,87 +1176,11 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         public final ServerEntity serverEntity;
+         private final Entity entity;
+         private final int range;
+-        private SectionPos lastSectionPos;
+         public final Set<ServerPlayerConnection> seenBy = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>(); // Paper - Perf: optimise map impl
+         public final HashMap<io.netty.channel.EventLoop, pl.optimusteam.optimus.network.LoopBucket> seenBy_loopBuckets = new HashMap<>(); // Optimus - Optimize packet broadcasting - store LoopBuckets for seenBy connections
+ 
+         // Paper start - optimise entity tracker
+-        private long lastChunkUpdate = -1L;
+-        private ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk lastTrackedChunk;
+-
+-        @Override
+-        public final void moonrise$tick(final ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk chunk) {
+-            if (chunk == null) {
+-                this.moonrise$clearPlayers();
+-                return;
+-            }
+-
+-            final ca.spottedleaf.moonrise.common.list.ReferenceList<ServerPlayer> players = chunk.getPlayers(ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.VIEW_DISTANCE);
+-
+-            if (players == null) {
+-                this.moonrise$clearPlayers();
+-                return;
+-            }
+-
+-            final long lastChunkUpdate = this.lastChunkUpdate;
+-            final long currChunkUpdate = chunk.getUpdateCount();
+-            final ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk lastTrackedChunk = this.lastTrackedChunk;
+-            this.lastChunkUpdate = currChunkUpdate;
+-            this.lastTrackedChunk = chunk;
+-
+-            final ServerPlayer[] playersRaw = players.getRawDataUnchecked();
+-
+-            for (int i = 0, len = players.size(); i < len; ++i) {
+-                final ServerPlayer player = playersRaw[i];
+-                this.updatePlayer(player);
+-            }
+-
+-            if (lastChunkUpdate != currChunkUpdate || lastTrackedChunk != chunk) {
+-                // need to purge any players possible not in the chunk list
+-                for (final ServerPlayerConnection conn : new java.util.ArrayList<>(this.seenBy)) {
+-                    final ServerPlayer player = conn.getPlayer();
+-                    if (!players.contains(player)) {
+-                        this.removePlayer(player);
+-                    }
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public final void moonrise$removeNonTickThreadPlayers() {
+-            boolean foundToRemove = false;
+-            for (final ServerPlayerConnection conn : this.seenBy) {
+-                if (!ca.spottedleaf.moonrise.common.util.TickThread.isTickThreadFor(conn.getPlayer())) {
+-                    foundToRemove = true;
+-                    break;
+-                }
+-            }
+-
+-            if (!foundToRemove) {
+-                return;
+-            }
+-
+-            for (final ServerPlayerConnection conn : new java.util.ArrayList<>(this.seenBy)) {
+-                ServerPlayer player = conn.getPlayer();
+-                if (!ca.spottedleaf.moonrise.common.util.TickThread.isTickThreadFor(player)) {
+-                    this.removePlayer(player);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public final void moonrise$clearPlayers() {
+-            this.lastChunkUpdate = -1;
+-            this.lastTrackedChunk = null;
+-            if (this.seenBy.isEmpty()) {
+-                return;
+-            }
+-            for (final ServerPlayerConnection conn : new java.util.ArrayList<>(this.seenBy)) {
+-                ServerPlayer player = conn.getPlayer();
+-                this.removePlayer(player);
+-            }
+-        }
+-
++        // Optimus - Optimize Entity Tracker using SoA (ECS) - per-pair tick moved to EntityTracker
+         @Override
+         public final boolean moonrise$hasPlayers() {
+             return !this.seenBy.isEmpty();
+@@ -1300,7 +1191,6 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             this.serverEntity = new ServerEntity(ChunkMap.this.level, entity, updateInterval, trackDelta, this, this.seenBy); // Paper
+             this.entity = entity;
+             this.range = range;
+-            this.lastSectionPos = SectionPos.of(entity);
+         }
+ 
+         @Override
+@@ -1351,6 +1241,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+ 
+         public void removePlayer(final ServerPlayer player) {
+             org.spigotmc.AsyncCatcher.catchOp("player tracker clear"); // Spigot
++            pl.optimusteam.optimus.ecs.PlayerComponents.clearSeenBit(player.ecsSlot, this.entity.ecsEntitySlot); // Optimus - Optimize Entity Tracker using SoA (ECS)
+             if (this.seenBy.remove(player.connection)) {
+                 // Optimus start - Optimize packet broadcasting - remove player.connection from this.seenBy_loopBuckets
+                 io.netty.channel.EventLoop eventLoop = player.connection.connection.channel.eventLoop();
+@@ -1399,6 +1290,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                 }
+                 // CraftBukkit end
+                 if (visibleToPlayer) {
++                    pl.optimusteam.optimus.ecs.PlayerComponents.setSeenBit(player.ecsSlot, this.entity.ecsEntitySlot); // Optimus - Optimize Entity Tracker using SoA (ECS)
+                     if (this.seenBy.add(player.connection)) {
+                         // Optimus start - Optimize packet broadcasting - add player.connection to this.seenBy_loopBuckets
+                         io.netty.channel.EventLoop eventLoop = player.connection.connection.channel.eventLoop();
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 60ff8173750b57aa05bb19a3dd1c744f870f59a5..dd4e387b34f878a7287f285cc69f1dfab3e64492 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -2577,6 +2577,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+             this.connection.send(new ClientboundSetCameraPacket(this.camera));
+             this.connection.resetPosition();
++            if (this.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setCameraIsSelf(this.ecsEntitySlot, this.camera == this); // Optimus - Optimize Entity Tracker using SoA (ECS)
+         }
+     }
+ 
+diff --git a/net/minecraft/server/level/ServerPlayerGameMode.java b/net/minecraft/server/level/ServerPlayerGameMode.java
+index bc2438bc341ea1839c128b195f268e73035ad252..d28ae0e2d511394810aa28f24d9af0d65fc95340 100644
+--- a/net/minecraft/server/level/ServerPlayerGameMode.java
++++ b/net/minecraft/server/level/ServerPlayerGameMode.java
+@@ -102,6 +102,7 @@ public class ServerPlayerGameMode {
+         Abilities abilities = this.player.getAbilities();
+         gameModeForPlayer.updatePlayerAbilities(abilities);
+         if (this.player.ecsSlot != -1) pl.optimusteam.optimus.ecs.PlayerComponents.setSpectator(this.player.ecsSlot, gameModeForPlayer == GameType.SPECTATOR); // Optimus - Mini ECS
++        if (this.player.ecsEntitySlot != -1) pl.optimusteam.optimus.ecs.EntityComponents.setSpectatorEntity(this.player.ecsEntitySlot, gameModeForPlayer == GameType.SPECTATOR); // Optimus - Optimize Entity Tracker using SoA (ECS)
+     }
+ 
+     private boolean isInRangeOfGround() {
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 3489b9db01b6819a504c3435f1482b07993da77f..02fa681c0af1ff1af199174de48a406a8760520f 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -3389,6 +3389,7 @@ public abstract class Entity
+ 
+             this.passengers = ImmutableList.copyOf(newPassengers);
+         }
++        pl.optimusteam.optimus.ecs.EntityComponents.syncEffectiveRange(this); // Optimus - Optimize Entity Tracker using SoA (ECS)
+     }
+ 
+     // Paper start - Force entity dismount during teleportation
+@@ -3434,6 +3435,7 @@ public abstract class Entity
+         } else {
+             this.passengers = this.passengers.stream().filter(p -> p != passenger).collect(ImmutableList.toImmutableList());
+         }
++        pl.optimusteam.optimus.ecs.EntityComponents.syncEffectiveRange(this); // Optimus - Optimize Entity Tracker using SoA (ECS)
+ 
+         passenger.boardingCooldown = 60;
+         return true; // CraftBukkit

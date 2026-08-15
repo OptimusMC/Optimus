@@ -1,7 +1,12 @@
 package pl.optimusteam.optimus.ecs;
 
+import ca.spottedleaf.moonrise.common.util.CoordinateUtils;
+import ca.spottedleaf.moonrise.patches.chunk_system.player.ChunkSystemServerPlayer;
 import ca.spottedleaf.moonrise.patches.chunk_system.player.RegionizedPlayerChunkLoader;
+import ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import net.minecraft.network.Connection;
+import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.Arrays;
@@ -16,6 +21,8 @@ public final class PlayerComponents {
     public static int[] viewDistance = new int[capacity];
     public static boolean[] spectator = new boolean[capacity];
     public static boolean[] hasInvertedVisibility = new boolean[capacity];
+    public static long[][] seenByBits = new long[capacity][];
+    public static long[][] sentBits = new long[capacity][];
     public static ServerPlayer[] player = new ServerPlayer[capacity];
     public static Connection[] connection = new Connection[capacity];
 
@@ -30,6 +37,23 @@ public final class PlayerComponents {
         viewDistance[slot] = RegionizedPlayerChunkLoader.getAPISendViewDistance(p);
         spectator[slot] = p.isSpectator();
         hasInvertedVisibility[slot] = p.getBukkitEntity().optimus$hasInvertedVisibility();
+        long[] seen = new long[EntityComponents.capacityWords()];
+        for (int i = 0, n = EntityComponents.size; i < n; ++i) {
+            ChunkMap.TrackedEntity tracker = ((EntityTrackerEntity) EntityComponents.entity[i]).moonrise$getTrackedEntity();
+            if (tracker != null && tracker.seenBy.contains(p.connection)) seen[i >> 6] |= 1L << i;
+        }
+        seenByBits[slot] = seen;
+        long[] sent = new long[256];
+        RegionizedPlayerChunkLoader.PlayerChunkLoaderData loader = ((ChunkSystemServerPlayer) p).moonrise$getChunkLoader();
+        if (loader != null) {
+            LongIterator it = loader.getSentChunksRaw().iterator();
+            while (it.hasNext()) {
+                long key = it.nextLong();
+                int idx = ((CoordinateUtils.getChunkX(key) & 127) << 7) | (CoordinateUtils.getChunkZ(key) & 127);
+                sent[idx >> 6] |= 1L << idx;
+            }
+        }
+        sentBits[slot] = sent;
         player[slot] = p;
         connection[slot] = p.connection.connection;
         p.ecsSlot = slot;
@@ -48,11 +72,15 @@ public final class PlayerComponents {
             viewDistance[slot] = viewDistance[last];
             spectator[slot] = spectator[last];
             hasInvertedVisibility[slot] = hasInvertedVisibility[last];
+            seenByBits[slot] = seenByBits[last];
+            sentBits[slot] = sentBits[last];
             player[slot] = player[last];
             connection[slot] = connection[last];
             player[slot].ecsSlot = slot;
         }
         dimension[last] = null;
+        seenByBits[last] = null;
+        sentBits[last] = null;
         player[last] = null;
         connection[last] = null;
     }
@@ -79,6 +107,49 @@ public final class PlayerComponents {
         hasInvertedVisibility[slot] = v;
     }
 
+    public static void setSeenBit(int playerSlot, int entitySlot) {
+        if (playerSlot == -1 || entitySlot == -1) return;
+        seenByBits[playerSlot][entitySlot >> 6] |= 1L << entitySlot;
+    }
+
+    public static void clearSeenBit(int playerSlot, int entitySlot) {
+        if (playerSlot == -1 || entitySlot == -1) return;
+        seenByBits[playerSlot][entitySlot >> 6] &= ~(1L << entitySlot);
+    }
+
+    public static void sentChunkAdd(ServerPlayer p, int cx, int cz) {
+        int slot = p.ecsSlot;
+        if (slot == -1) return;
+        int idx = ((cx & 127) << 7) | (cz & 127);
+        sentBits[slot][idx >> 6] |= 1L << idx;
+    }
+
+    public static void sentChunkRemove(ServerPlayer p, int cx, int cz) {
+        int slot = p.ecsSlot;
+        if (slot == -1) return;
+        int idx = ((cx & 127) << 7) | (cz & 127);
+        sentBits[slot][idx >> 6] &= ~(1L << idx);
+    }
+
+    public static void fixupEntityBits(int slot, int last) {
+        for (int p = 0; p < size; ++p) {
+            long[] bits = seenByBits[p];
+            boolean moved = (bits[last >> 6] & (1L << last)) != 0L;
+            bits[last >> 6] &= ~(1L << last);
+            if (slot != last) {
+                if (moved) bits[slot >> 6] |= 1L << slot;
+                else bits[slot >> 6] &= ~(1L << slot);
+            }
+        }
+    }
+
+    public static void growEntityBits(int entityCapacity) {
+        int words = entityCapacity >> 6;
+        for (int p = 0; p < size; ++p) {
+            seenByBits[p] = Arrays.copyOf(seenByBits[p], words);
+        }
+    }
+
     private static void grow() {
         capacity *= 2;
         x = Arrays.copyOf(x, capacity);
@@ -88,6 +159,8 @@ public final class PlayerComponents {
         viewDistance = Arrays.copyOf(viewDistance, capacity);
         spectator = Arrays.copyOf(spectator, capacity);
         hasInvertedVisibility = Arrays.copyOf(hasInvertedVisibility, capacity);
+        seenByBits = Arrays.copyOf(seenByBits, capacity);
+        sentBits = Arrays.copyOf(sentBits, capacity);
         player = Arrays.copyOf(player, capacity);
         connection = Arrays.copyOf(connection, capacity);
     }
