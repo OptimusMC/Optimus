@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Szymon <szymonwitek02@gmail.com>
+Date: Sun, 16 Aug 2026 23:20:15 +0200
+Subject: [PATCH] Optimize broadcast using SoA (ECS)
+
+Co-authored-by: MsMaciek <62432088+MsMaciek123@users.noreply.github.com>
+
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 94564687ea21e71d45fb264f917088a1a1ad2946..b2d9935f035195b423a82f9e06c5f70e68cd85a9 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -929,32 +929,54 @@ public abstract class PlayerList {
+         final ResourceKey<Level> dimension,
+         final Packet<?> packet
+     ) {
+-        // Optimus start - Optimize packet broadcasting
+-        java.util.HashMap<io.netty.channel.EventLoop, pl.optimusteam.optimus.network.LoopBucket> eventLoopBuckets = this.players.getEventLoopBuckets();
+-
+-        for (pl.optimusteam.optimus.network.LoopBucket loopBucket : eventLoopBuckets.values()) {
+-            java.util.ArrayList<net.minecraft.network.Connection> connectionsInRange = new java.util.ArrayList<>(loopBucket.connections.size());
+-            for (Connection connection : loopBucket.connections) {
+-                ServerPlayer player = connection.getPlayer();
+-                // CraftBukkit start - Test if player receiving packet can see the source of the packet
+-                if (except != null && !player.getBukkitEntity().canSee(except.getBukkitEntity())) {
++        // Optimus start - Optimize broadcast using SoA (ECS)
++        final double rangeSq = range * range;
++        final boolean exceptVisibleByDefault = except == null || except.visibleByDefault;
++        final java.util.ArrayList<pl.optimusteam.optimus.network.LoopBucket> buckets = this.players.getBucketsByIndex();
++
++        @SuppressWarnings("unchecked")
++        final java.util.@Nullable ArrayList<Connection>[] perBucket = new java.util.ArrayList[buckets.size()];
++
++        final int size = pl.optimusteam.optimus.ecs.PlayerComponents.size;
++        final double[] xs = pl.optimusteam.optimus.ecs.PlayerComponents.x;
++        final double[] ys = pl.optimusteam.optimus.ecs.PlayerComponents.y;
++        final double[] zs = pl.optimusteam.optimus.ecs.PlayerComponents.z;
++        final Object[] dimensions = pl.optimusteam.optimus.ecs.PlayerComponents.dimension;
++        final boolean[] hasInvertedVisibility = pl.optimusteam.optimus.ecs.PlayerComponents.hasInvertedVisibility;
++        final ServerPlayer[] players = pl.optimusteam.optimus.ecs.PlayerComponents.player;
++        final Connection[] connections = pl.optimusteam.optimus.ecs.PlayerComponents.connection;
++        final int[] bucketIds = pl.optimusteam.optimus.ecs.PlayerComponents.bucketId;
++
++        for (int i = 0; i < size; i++) {
++            double xd = x - xs[i];
++            double yd = y - ys[i];
++            double zd = z - zs[i];
++            if (xd * xd + yd * yd + zd * zd >= rangeSq) continue;
++            if (dimensions[i] != dimension) continue;
++            ServerPlayer player = players[i];
++            if (player == except) continue;
++            // CraftBukkit - Test if player receiving packet can see the source of the packet
++            if (except != null) {
++                if (hasInvertedVisibility[i]) {
++                    if (!player.getBukkitEntity().canSee(except.getBukkitEntity())) continue;
++                } else if (!exceptVisibleByDefault) {
+                     continue;
+                 }
+-                // CraftBukkit end
+-                if (player != except && player.level().dimension() == dimension) {
+-                    double xd = x - player.getX();
+-                    double yd = y - player.getY();
+-                    double zd = z - player.getZ();
+-                    if (xd * xd + yd * yd + zd * zd < range * range) {
+-                        connectionsInRange.add(player.connection.connection);
+-                    }
+-                }
+             }
++            int bucket = bucketIds[i];
++            java.util.ArrayList<Connection> connectionsInRange = perBucket[bucket];
++            if (connectionsInRange == null) {
++                perBucket[bucket] = connectionsInRange = new java.util.ArrayList<>(size);
++            }
++            connectionsInRange.add(connections[i]);
++        }
+ 
+-            var queueEntry = new pl.optimusteam.optimus.network.QueueEntry(connectionsInRange, packet, null, false);
+-            loopBucket.batchState.offerToMainQueue(queueEntry);
++        for (int bucket = 0; bucket < perBucket.length; bucket++) {
++            if (perBucket[bucket] == null) continue;
++            buckets.get(bucket).batchState.offerToMainQueue(
++                new pl.optimusteam.optimus.network.QueueEntry(perBucket[bucket], packet, null, false));
+         }
+-        // Optimus end - Optimize packet broadcasting
++        // Optimus end - Optimize broadcast using SoA (ECS)
+     }
+ 
+     public void saveAll() {

@@ -25,8 +25,9 @@ public final class PlayerComponents {
     public static long[][] sentBits = new long[capacity][];
     public static ServerPlayer[] player = new ServerPlayer[capacity];
     public static Connection[] connection = new Connection[capacity];
+    public static int[] bucketId = new int[capacity];
 
-    public static void add(ServerPlayer p) {
+    public static void add(ServerPlayer p, int bucket) {
         if (p.ecsSlot != -1) throw new IllegalStateException("player already registered: " + p);
         if (size == capacity) grow();
         int slot = size++;
@@ -56,6 +57,7 @@ public final class PlayerComponents {
         sentBits[slot] = sent;
         player[slot] = p;
         connection[slot] = p.connection.connection;
+        bucketId[slot] = bucket;
         p.ecsSlot = slot;
     }
 
@@ -76,6 +78,7 @@ public final class PlayerComponents {
             sentBits[slot] = sentBits[last];
             player[slot] = player[last];
             connection[slot] = connection[last];
+            bucketId[slot] = bucketId[last];
             player[slot].ecsSlot = slot;
         }
         dimension[last] = null;
@@ -163,5 +166,6 @@ public final class PlayerComponents {
         sentBits = Arrays.copyOf(sentBits, capacity);
         player = Arrays.copyOf(player, capacity);
         connection = Arrays.copyOf(connection, capacity);
+        bucketId = Arrays.copyOf(bucketId, capacity);
     }
 }
